@@ -12,8 +12,8 @@
   <link rel="manifest" href="/manifest.json">
   <script src="https://unpkg.com/@vkontakte/vk-bridge/dist/browser.min.js"></script>
   <style>
-    :root { --bg:#F8F9FA; --surface:#FFF; --text:#1F2937; --text2:#6B7280; --primary:#5B7FFF; --primary-h:#4A6FE0; --user-bg:#5B7FFF; --user-text:#FFF; --bot-bg:#FFF; --bot-text:#1F2937; --border:#E5E7EB; --input:#FFF; --font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif }
-    .dark { --bg:#1F2937; --surface:#374151; --text:#F3F4F6; --text2:#9CA3AF; --bot-bg:#374151; --bot-text:#F3F4F6; --border:#4B5563; --input:#374151 }
+    :root { --bg:#F5F5F5; --surface:#FFF; --text:#1F2937; --text2:#6B7280; --primary:#666666; --primary-h:#555555; --user-bg:#666666; --user-text:#FFF; --bot-bg:#FFF; --bot-text:#1F2937; --border:#DDD; --input:#FFF; --font:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif }
+    .dark { --bg:#0d0d0d; --surface:#1a1a1a; --text:#e8e8e8; --text2:#888888; --bot-bg:#1a1a1a; --bot-text:#e8e8e8; --border:#2a2a2a; --input:#1a1a1a }
     * { margin:0; padding:0; box-sizing:border-box }
     html,body { height:100%; overflow:hidden }
     body { font-family:var(--font); background:var(--bg); color:var(--text); -webkit-font-smoothing:antialiased }
@@ -130,6 +130,7 @@
         var recording = false;
         var mediaRecorder = null;
         var audioChunks = [];
+        var currentAudio = null;
 
         function md(text) {
           if (!text) return '';
@@ -159,7 +160,7 @@
           var isDark = theme === 'dark';
           document.documentElement.classList.toggle('dark', isDark);
           var mt = document.querySelector('meta[name="theme-color"]');
-          if (mt) mt.content = isDark ? '#1F2937' : '#F8F9FA';
+          if (mt) mt.content = isDark ? '#0d0d0d' : '#F5F5F5';
           if (tma && tma.BackButton) tma.BackButton.isVisible = msgs.length > 0;
 
           var html = '<div class="hdr">' +
@@ -234,11 +235,12 @@
         function escHtml(s) { return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
 
         function startRecording() {
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { alert('Microphone not supported'); return; }
+          if (typeof MediaRecorder === 'undefined') { alert('Recording not supported in this browser'); return; }
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { alert('Microphone not accessible'); return; }
           navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
-            var mimeType = 'audio/webm;codecs=opus';
-            if (!MediaRecorder.isTypeSupported(mimeType)) mimeType = 'audio/webm';
-            var recorder = new MediaRecorder(stream, { mimeType: mimeType });
+            var mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4', ''];
+            var mimeType = mimeTypes.find(function(mt) { return mt === '' || MediaRecorder.isTypeSupported(mt); });
+            var recorder = new MediaRecorder(stream, mimeType ? { mimeType: mimeType } : {});
             mediaRecorder = recorder;
             audioChunks = [];
             recorder.ondataavailable = function(e) { if (e.data.size > 0) audioChunks.push(e.data); };
@@ -258,6 +260,7 @@
         }
 
         function toggleMic() { recording ? stopRecording() : startRecording(); }
+        window.toggleMic = toggleMic;
 
         function processRecording() {
           if (audioChunks.length === 0) { render(); return; }
@@ -280,10 +283,33 @@
 
         function playTts(text) {
           if (!text) return;
+          if (currentAudio) { currentAudio.pause(); currentAudio.src = ''; currentAudio = null; return; }
           if (window.speechSynthesis.speaking) { window.speechSynthesis.cancel(); return; }
-          var clean = text.replace(/<[^>]+>/g,'').replace(/[*#[\]()>|`~\\-]/g,'');
-          var u = new SpeechSynthesisUtterance(clean);
-          u.lang = 'ru-RU'; u.rate = 1.0; u.pitch = 1.0; u.volume = 1.0;
+          var clean = text.replace(/<[^>]+>/g,'').replace(/[*#[\]()>|`~\\-]/g,'').trim();
+          if (!clean) return;
+          fetch('https://jasper-chat.businessconsultation-today.workers.dev/api/v1/voice/synthesize', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: clean, voice: 'ru-RU' })
+          }).then(function(r) {
+            if (!r.ok) throw new Error('TTS failed: ' + r.status);
+            return r.blob();
+          }).then(function(blob) {
+            var url = URL.createObjectURL(blob);
+            var audio = new Audio(url);
+            currentAudio = audio;
+            audio.onended = function() { URL.revokeObjectURL(url); if (currentAudio === audio) currentAudio = null; };
+            audio.onerror = function() { URL.revokeObjectURL(url); if (currentAudio === audio) { currentAudio = null; fallbackTts(clean); } };
+            audio.play().catch(function() { if (currentAudio === audio) { currentAudio = null; fallbackTts(clean); } });
+          }).catch(function() { fallbackTts(clean); });
+        }
+
+        function fallbackTts(text) {
+          var u = new SpeechSynthesisUtterance(text);
+          u.lang = 'ru-RU'; u.rate = 0.85; u.pitch = 1.0; u.volume = 1.0;
+          var voices = window.speechSynthesis.getVoices();
+          var ru = voices.find(function(v) { return v.lang.startsWith('ru'); });
+          if (ru) u.voice = ru;
           window.speechSynthesis.speak(u);
         }
 
