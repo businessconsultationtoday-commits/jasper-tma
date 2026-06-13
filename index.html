@@ -132,6 +132,14 @@
         var audioChunks = [];
         var currentAudio = null;
         var recognition = null;
+        var touchInProgress = false;
+
+        function showError(msg) {
+          var el = document.getElementById('err');
+          if (!el) { el = document.createElement('div'); el.id = 'err'; el.style.cssText = 'position:fixed;bottom:76px;left:50%;transform:translateX(-50%);background:#EF4444;color:#fff;padding:6px 14px;border-radius:8px;font-size:13px;z-index:999;max-width:85%;text-align:center;pointer-events:none'; app.appendChild(el); }
+          el.textContent = msg; el.style.display = 'block';
+          clearTimeout(el._t); el._t = setTimeout(function() { el.style.display = 'none'; }, 3000);
+        }
 
         function md(text) {
           if (!text) return '';
@@ -185,7 +193,7 @@
               html += '<div class="msg ' + (isUser ? 'u' : 'b') + '">' +
                 '<div class="lb" style="display:flex;align-items:center;gap:6px">' +
                 '<span>' + (isUser ? 'Вы' : 'Quark') + '</span>' +
-                (!isUser ? '<span class="spkr" data-idx="' + i + '" style="cursor:pointer;font-size:14px;line-height:1" title="Read aloud">\u{1F50A}</span>' : '') +
+                (!isUser ? '<span class="spkr" data-idx="' + i + '" style="cursor:pointer;font-size:13px;opacity:0.7" title="Read aloud">\u{1F50A}</span>' : '') +
                 '</div>' +
                 '<div class="bub">';
               if (!isUser) {
@@ -208,7 +216,7 @@
 
           html += '<div class="inp">' +
             '<textarea id="inp" placeholder="Ask me anything..." rows="1"' + (loading ? ' disabled' : '') + ' onkeydown="onKey(event)"></textarea>' +
-            '<button id="micBtn" onmousedown="startRecording()" onmouseup="stopRecording()" onmouseleave="stopRecording()" ontouchstart="startRecording()" ontouchend="stopRecording()" title="Voice input" style="width:44px;height:44px;border-radius:50%;font-size:18px;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;border:none;' + (recording ? 'background:#EF4444;color:#fff' : 'background:var(--surface);color:var(--text2);border:1px solid var(--border)') + '">\u{1F3A4}</button>' +
+            '<button id="micBtn" onmousedown="startRecording(event)" onmouseup="stopRecording(event)" ontouchstart="startRecording(event)" ontouchend="stopRecording(event)" title="Voice input" style="width:36px;height:36px;border-radius:50%;font-size:16px;cursor:pointer;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;border:none;' + (recording ? 'background:#EF4444;color:#fff' : 'background:transparent;color:var(--text2);border:1px solid var(--border)') + '">\u{1F3A4}</button>' +
             '<button id="sendBtn" onclick="doSend()" disabled>' +
             '<span style="transform:rotate(-45deg);display:inline-block;margin-left:-2px">\u27A4</span>' +
             '</button></div>';
@@ -240,8 +248,10 @@
           return cyr > text.length * 0.2 ? 'ru' : 'en';
         }
 
-        function startRecording() {
+        function startRecording(e) {
           if (recording) return;
+          if (e && e.type === 'touchstart') touchInProgress = true;
+          if (e && e.type === 'mousedown' && touchInProgress) return;
           var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
           if (SR) {
             try {
@@ -255,9 +265,9 @@
                 var text = e.results[0][0].transcript || '';
                 recognition = null; recording = false;
                 if (text.trim()) { var inp = document.getElementById('inp'); if (inp) inp.value = text; doSend(); }
-                else { render(); }
+                else { showError('Speech not recognized'); render(); }
               };
-              recog.onerror = function() { recognition = null; recording = false; render(); };
+              recog.onerror = function(e) { recognition = null; recording = false; if (e.error !== 'no-speech' && e.error !== 'aborted') showError('Speech error: ' + e.error); render(); };
               recog.onend = function() { recognition = null; };
               recog.start();
               recording = true;
@@ -265,8 +275,8 @@
               return;
             } catch(e) { recognition = null; }
           }
-          if (typeof MediaRecorder === 'undefined') { alert('Recording not supported'); return; }
-          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { alert('Microphone not accessible'); return; }
+          if (typeof MediaRecorder === 'undefined') { showError('Recording not supported in this browser'); return; }
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) { showError('Microphone not accessible'); return; }
           navigator.mediaDevices.getUserMedia({ audio: true }).then(function(stream) {
             var mimeTypes = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4;codecs=mp4a.40.2', 'audio/mp4', ''];
             var mimeType = mimeTypes.find(function(mt) { return mt === '' || MediaRecorder.isTypeSupported(mt); });
@@ -278,12 +288,14 @@
             recorder.start();
             recording = true;
             render();
-          }).catch(function(err) { alert('Microphone error: ' + err.message); });
+          }).catch(function(err) { showError('Microphone error: ' + err.message); });
         }
         window.startRecording = startRecording;
 
-        function stopRecording() {
+        function stopRecording(e) {
           if (!recording) return;
+          if (e && e.type === 'touchend') touchInProgress = false;
+          if (e && e.type === 'mouseup' && touchInProgress) { touchInProgress = false; return; }
           if (recognition) { try { recognition.stop(); } catch(e) {} recognition = null; }
           if (mediaRecorder && mediaRecorder.state !== 'inactive') { mediaRecorder.stop(); }
           recording = false;
@@ -292,7 +304,7 @@
         window.stopRecording = stopRecording;
 
         function processRecording() {
-          if (audioChunks.length === 0) { render(); return; }
+          if (audioChunks.length === 0) { showError('No audio captured'); render(); return; }
           var mimeType = mediaRecorder ? mediaRecorder.mimeType : 'audio/webm';
           var blob = new Blob(audioChunks, { type: mimeType });
           var reader = new FileReader();
@@ -302,7 +314,7 @@
               ctx.decodeAudioData(reader.result, function(buffer) { sendPCMToWorker(audioBufferToPCM16(buffer)); }, function() { sendRawAudio(blob); });
             } catch(e) { sendRawAudio(blob); }
           };
-          reader.onerror = function() { render(); };
+          reader.onerror = function() { sendRawAudio(blob); };
           reader.readAsArrayBuffer(blob);
         }
 
@@ -344,8 +356,8 @@
           }).then(function(data) {
             var text = data.text || '';
             if (text.trim()) { var inp = document.getElementById('inp'); if (inp) inp.value = text; doSend(); }
-            else { render(); }
-          }).catch(function(err) { alert('Transcription error: ' + err.message); render(); });
+            else { showError('Speech not recognized'); render(); }
+          }).catch(function(err) { showError('Transcription error: ' + err.message); render(); });
         }
 
         function sendRawAudio(blob) {
@@ -357,8 +369,8 @@
             .then(function(data) {
               var text = data.text || '';
               if (text.trim()) { var inp = document.getElementById('inp'); if (inp) inp.value = text; doSend(); }
-              else { render(); }
-            }).catch(function(err) { alert('Transcription error: ' + err.message); render(); });
+              else { showError('Speech not recognized'); render(); }
+            }).catch(function(err) { showError('Transcription error: ' + err.message); render(); });
         }
 
         function playTts(text) {
@@ -388,10 +400,23 @@
         function fallbackTts(text, lang) {
           var u = new SpeechSynthesisUtterance(text);
           u.lang = lang === 'ru' ? 'ru-RU' : 'en-US';
-          u.rate = 0.85; u.pitch = 0.9; u.volume = 1.0;
+          u.rate = 0.85; u.pitch = 0.85; u.volume = 1.0;
           var voices = window.speechSynthesis.getVoices();
-          var male = voices.find(function(v) { return v.lang.startsWith(lang) && !/dariya|zira|aria/i.test(v.name); });
-          if (male) u.voice = male;
+          if (voices.length === 0) { window.speechSynthesis.onvoiceschanged = function() { window.speechSynthesis.onvoiceschanged = null; fallbackTts(text, lang); }; window.speechSynthesis.getVoices(); return; }
+          var maleNames = lang === 'ru' ? ['pavel','mikhail','alex','boris','dmitry','vladimir','sergey','ivan','peter','nikolay'] : ['david','mark','james','paul','mike','daniel','alex','peter','john','robert','michael','william','richard','thomas','george'];
+          for (var i = 0; i < voices.length; i++) {
+            var n = voices[i].name.toLowerCase();
+            if (voices[i].lang.startsWith(lang)) {
+              for (var j = 0; j < maleNames.length; j++) { if (n.includes(maleNames[j])) { u.voice = voices[i]; break; } }
+              if (u.voice) break;
+            }
+          }
+          if (!u.voice) {
+            for (var i = 0; i < voices.length; i++) {
+              if (voices[i].lang.startsWith(lang) && !/dariya|zira|aria|hazel|heather|susan|linda|catherine|elena|olga|natasha|anna|maria|elizabeth|jessica|sarah|emma/i.test(voices[i].name)) { u.voice = voices[i]; break; }
+            }
+          }
+          if (!u.voice) { var fallback = voices.find(function(v) { return v.lang.startsWith(lang); }); if (fallback) u.voice = fallback; }
           window.speechSynthesis.speak(u);
         }
 
